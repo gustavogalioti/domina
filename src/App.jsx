@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-impor
+i
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const ADMIN_EMAIL = 'gustavo1088@hotmail.com';
