@@ -578,10 +578,8 @@ export default function App() {
     if (!stravaToken) return;
     setStravaLoading(true);
     try {
-      const res = await fetch(`${STRAVA_PROXY}?action=activities`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
-        body: JSON.stringify({ access_token: stravaToken }),
+      const res = await fetch('https://www.strava.com/api/v3/athlete/activities?per_page=30', {
+        headers: { 'Authorization': `Bearer ${stravaToken}` },
       });
       const activities = await res.json();
       if (!Array.isArray(activities)) { showNotif('Erro ao buscar atividades.'); setStravaLoading(false); return; }
