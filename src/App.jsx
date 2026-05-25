@@ -570,7 +570,7 @@ export default function App() {
         setStravaToken(data.access_token);
         showNotif('Strava conectado! ✅');
       }
-    } catch (e) { console.error(e); }
+    } catch (e) { showNotif(`Erro: ${e.message}`); }
     setStravaLoading(false);
   };
 
