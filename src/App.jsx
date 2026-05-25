@@ -491,6 +491,9 @@ export default function App() {
   const [showStravaModal, setShowStravaModal] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showMyTrails, setShowMyTrails] = useState(false);
+  const [alerts, setAlerts] = useState([]);
+  const [showAlerts, setShowAlerts] = useState(false);
+  const [lastVisit, setLastVisit] = useState(() => localStorage.getItem('domina_last_visit') || null);
   const [myTrails, setMyTrails] = useState([]);
   const [editData, setEditData] = useState({});
   const [avatarUrl, setAvatarUrl] = useState(() => localStorage.getItem('domina_avatar') || null);
@@ -516,7 +519,7 @@ export default function App() {
 
   useEffect(() => {
     if (screen !== 'app') return;
-    loadTrails(); loadPosts(); loadUsers();
+    loadTrails(); loadPosts(); loadUsers(); loadAlerts();
   }, [screen]);
 
   // Exchange Strava code for token after login
@@ -629,6 +632,24 @@ export default function App() {
     setStravaActivities(prev => prev.filter(a => a.id !== activity.id));
     loadTrails(); loadUsers();
     showNotif(`"${activity.name}" importada! 🔥`);
+  };
+
+  const loadAlerts = async () => {
+    if (!currentUser) return;
+    // Get trails that were taken from this user (user_id changed but we track via invasion_log)
+    const data = await sb.from('invasion_log').select('*', { eq: { victim_id: currentUser.id }, order: 'created_at.desc', limit: 20 });
+    if (Array.isArray(data)) {
+      const unread = lastVisit ? data.filter(a => new Date(a.created_at) > new Date(lastVisit)) : data;
+      setAlerts(unread);
+    }
+  };
+
+  const markAlertsRead = () => {
+    const now = new Date().toISOString();
+    localStorage.setItem('domina_last_visit', now);
+    setLastVisit(now);
+    setAlerts([]);
+    setShowAlerts(false);
   };
 
   const loadMyTrails = async () => {
@@ -768,6 +789,15 @@ export default function App() {
         user_id: newUserId,
         user_name: newUserName,
       }, { id: trailId });
+      // Log invasion for victim notification
+      await sb.from('invasion_log').insert({
+        invader_id: newUserId,
+        invader_name: newUserName,
+        victim_id: trail.user_id,
+        victim_name: trail.user_name,
+        trail_id: trailId,
+        km: trail.km,
+      });
       showNotif(`Território conquistado! 🔥 Você tomou uma rota de ${trail.user_name}`);
     }
   };
@@ -1015,6 +1045,19 @@ export default function App() {
           {page === 'profile' && (
             <div className="page">
               <div className="page-title">PERFIL</div>
+              {alerts.length > 0 && (
+                <div style={{ background: 'rgba(255,23,68,0.1)', border: '1px solid rgba(255,23,68,0.3)', borderRadius: 14, padding: 16, marginBottom: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#FF5252' }}>⚔️ Seu território foi invadido!</div>
+                    <button onClick={markAlertsRead} style={{ fontSize: 11, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}>Marcar como lido</button>
+                  </div>
+                  {alerts.slice(0, 5).map((a, i) => (
+                    <div key={i} style={{ fontSize: 12, color: 'var(--muted)', padding: '6px 0', borderTop: '1px solid var(--border)' }}>
+                      <span style={{ color: 'var(--text)', fontWeight: 600 }}>{a.invader_name}</span> tomou {Number(a.km || 0).toFixed(2)}km seus · {timeAgo(a.created_at)}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="profile-header">
                 <div style={{ position: 'relative', flexShrink: 0 }}>
                   {avatarUrl
@@ -1118,7 +1161,14 @@ export default function App() {
           <div className="bottom-nav-inner">
             {navItems.map(item => (
               <button key={item.id} className={`bottom-nav-item${page === item.id ? ' active' : ''}`} onClick={() => setPage(item.id)}>
-                <Icon name={item.icon} size={22} />
+                <div style={{ position: 'relative' }}>
+                  <Icon name={item.icon} size={22} />
+                  {item.id === 'profile' && alerts.length > 0 && (
+                    <div style={{ position: 'absolute', top: -4, right: -4, width: 16, height: 16, background: '#FF1744', borderRadius: '50%', fontSize: 9, fontWeight: 700, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {alerts.length}
+                    </div>
+                  )}
+                </div>
                 <span>{item.label}</span>
               </button>
             ))}
