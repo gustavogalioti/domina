@@ -489,6 +489,11 @@ export default function App() {
   const [stravaActivities, setStravaActivities] = useState([]);
   const [stravaLoading, setStravaLoading] = useState(false);
   const [showStravaModal, setShowStravaModal] = useState(false);
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showMyTrails, setShowMyTrails] = useState(false);
+  const [myTrails, setMyTrails] = useState([]);
+  const [editData, setEditData] = useState({});
+  const [avatarUrl, setAvatarUrl] = useState(() => localStorage.getItem('domina_avatar') || null);
   const timerRef = useRef(null);
 
   const showNotif = useCallback((msg) => { setNotif(msg); setTimeout(() => setNotif(null), 3200); }, []);
@@ -622,6 +627,51 @@ export default function App() {
     setStravaActivities(prev => prev.filter(a => a.id !== activity.id));
     loadTrails(); loadUsers();
     showNotif(`"${activity.name}" importada! 🔥`);
+  };
+
+  const loadMyTrails = async () => {
+    const data = await sb.from('trails').select('*', { eq: { user_id: currentUser.id }, order: 'created_at.desc' });
+    if (Array.isArray(data)) setMyTrails(data);
+  };
+
+  const deleteTrail = async (trailId, km) => {
+    await sb.from('trails').delete({ id: trailId });
+    const newDom = Math.max(0, (currentUser.dominated_distance || 0) - km * 0.6);
+    const newTotal = Math.max(0, (currentUser.total_distance || 0) - km);
+    await sb.from('users').update({ total_distance: newTotal, dominated_distance: newDom }, { id: currentUser.id });
+    setCurrentUser(prev => {
+      const updated = { ...prev, total_distance: newTotal, dominated_distance: newDom };
+      localStorage.setItem('domina_user', JSON.stringify(updated));
+      return updated;
+    });
+    setMyTrails(prev => prev.filter(t => t.id !== trailId));
+    loadUsers();
+    showNotif('Trilha apagada! 🗑️');
+  };
+
+  const saveProfile = async () => {
+    const { name, age, city } = editData;
+    if (!name || !age || !city) { showNotif('Preencha todos os campos'); return; }
+    await sb.from('users').update({ name, age: parseInt(age), city }, { id: currentUser.id });
+    const updated = { ...currentUser, name, age: parseInt(age), city };
+    localStorage.setItem('domina_user', JSON.stringify(updated));
+    setCurrentUser(updated);
+    setShowEditProfile(false);
+    loadUsers();
+    showNotif('Perfil atualizado! ✅');
+  };
+
+  const handleAvatarChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      localStorage.setItem('domina_avatar', dataUrl);
+      setAvatarUrl(dataUrl);
+      showNotif('Foto atualizada! ✅');
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleLogin = async () => {
@@ -911,11 +961,23 @@ export default function App() {
             <div className="page">
               <div className="page-title">PERFIL</div>
               <div className="profile-header">
-                <div className="avatar" style={{ width: 76, height: 76, fontSize: 30, background: currentUser.color + '28', color: currentUser.color }}>{getInitials(currentUser.name)}</div>
+                <div style={{ position: 'relative', flexShrink: 0 }}>
+                  {avatarUrl
+                    ? <img src={avatarUrl} alt="avatar" style={{ width: 76, height: 76, borderRadius: '50%', objectFit: 'cover', border: `3px solid ${currentUser.color}` }} />
+                    : <div className="avatar" style={{ width: 76, height: 76, fontSize: 30, background: currentUser.color + '28', color: currentUser.color }}>{getInitials(currentUser.name)}</div>
+                  }
+                  <label style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, borderRadius: '50%', background: currentUser.color, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '2px solid var(--surface)' }}>
+                    <Icon name="camera" size={12} />
+                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleAvatarChange} />
+                  </label>
+                </div>
                 <div className="profile-info">
                   <div className="profile-name">{currentUser.name}</div>
                   <div className="profile-loc"><Icon name="location" size={13} />{currentUser.city} · {currentUser.age} anos</div>
                   {currentUser.is_admin && <div className="admin-badge"><Icon name="shield" size={10} /> ADMIN</div>}
+                  <button onClick={() => { setEditData({ name: currentUser.name, age: currentUser.age, city: currentUser.city }); setShowEditProfile(true); }} style={{ marginTop: 8, padding: '6px 14px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--muted)', fontSize: 12, cursor: 'pointer' }}>
+                    Editar perfil
+                  </button>
                 </div>
               </div>
               <div className="profile-stats">
@@ -950,6 +1012,31 @@ export default function App() {
                 <div className="timeline-grid">{Array.from({ length: 9 }).map((_, i) => <div key={i} className="timeline-item"><Icon name="camera" size={18} /></div>)}</div>
                 <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 14 }}>Fotos aparecerão aqui</p>
               </div>
+              <div className="card" style={{ marginTop: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1 }}>Minhas trilhas</div>
+                  <button onClick={() => { loadMyTrails(); setShowMyTrails(!showMyTrails); }} style={{ fontSize: 12, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                    {showMyTrails ? 'Fechar' : 'Ver todas'}
+                  </button>
+                </div>
+                {showMyTrails && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {myTrails.length === 0 && <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>Nenhuma trilha encontrada</p>}
+                    {myTrails.map(t => (
+                      <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', background: 'var(--surface2)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                        <div style={{ width: 10, height: 10, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{t.activity_type === 'run' ? '🏃' : '🚴'} {Number(t.km || 0).toFixed(2)}km</div>
+                          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{new Date(t.created_at).toLocaleDateString('pt-BR')}</div>
+                        </div>
+                        <button onClick={() => deleteTrail(t.id, t.km)} style={{ padding: '5px 10px', background: 'rgba(255,23,68,0.1)', border: '1px solid rgba(255,23,68,0.3)', borderRadius: 8, color: '#FF5252', fontSize: 11, cursor: 'pointer' }}>
+                          Apagar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -983,6 +1070,44 @@ export default function App() {
           </div>
         </nav>
       </div>
+
+      {/* EDIT PROFILE MODAL */}
+      {showEditProfile && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 380 }}>
+            <div className="modal-header">
+              <div className="modal-title">EDITAR PERFIL</div>
+              <button onClick={() => setShowEditProfile(false)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer' }}><Icon name="close" size={20} /></button>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Nome</label>
+              <input className="form-input" value={editData.name || ''} onChange={e => setEditData(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">Idade</label>
+                <input className="form-input" type="number" value={editData.age || ''} onChange={e => setEditData(p => ({ ...p, age: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Cidade</label>
+                <input className="form-input" value={editData.city || ''} onChange={e => setEditData(p => ({ ...p, city: e.target.value }))} />
+              </div>
+            </div>
+            <div className="form-group" style={{ marginTop: 8 }}>
+              <label className="form-label">Foto de perfil</label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, cursor: 'pointer' }}>
+                {avatarUrl
+                  ? <img src={avatarUrl} alt="avatar" style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' }} />
+                  : <div className="avatar" style={{ width: 36, height: 36, fontSize: 14, background: currentUser.color + '28', color: currentUser.color }}>{getInitials(currentUser.name)}</div>
+                }
+                <span style={{ fontSize: 13, color: 'var(--muted)' }}>Clique para trocar a foto</span>
+                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleAvatarChange} />
+              </label>
+            </div>
+            <button className="btn-full" onClick={saveProfile}>SALVAR</button>
+          </div>
+        </div>
+      )}
 
       {/* STRAVA IMPORT MODAL */}
       {showStravaModal && (
