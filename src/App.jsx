@@ -624,6 +624,8 @@ export default function App() {
       localStorage.setItem('domina_user', JSON.stringify(updated));
       return updated;
     });
+    // Check territory overlaps for imported activity
+    await checkOverlaps({ points }, currentUser.id, currentUser.color, currentUser.name.split(' ')[0]);
     setStravaActivities(prev => prev.filter(a => a.id !== activity.id));
     loadTrails(); loadUsers();
     showNotif(`"${activity.name}" importada! 🔥`);
@@ -713,8 +715,61 @@ export default function App() {
     await sb.from('users').update({ total_distance: newTotal, dominated_distance: newDom }, { id: currentUser.id });
     setCurrentUser(prev => ({ ...prev, total_distance: newTotal, dominated_distance: newDom }));
     setLoading(false); setModal(null); setFinishData(null);
+    // Check territory overlaps
+    if (currentTrail.length > 1) {
+      const newTrailObj = { points: currentTrail };
+      await checkOverlaps(newTrailObj, currentUser.id, currentUser.color, currentUser.name.split(' ')[0]);
+    }
     loadTrails(); loadUsers();
     showNotif(`+${(km * 0.6).toFixed(2)}km dominados! 🏆`);
+  };
+
+  // Check and apply territory overlaps
+  const checkOverlaps = async (newTrail, newUserId, newColor, newUserName) => {
+    if (!newTrail.points || newTrail.points.length < 2) return;
+
+    // Get all other users' trails
+    const allTrails = await sb.from('trails').select('*', { order: 'created_at.desc', limit: 200 });
+    if (!Array.isArray(allTrails)) return;
+    const otherTrails = allTrails.filter(t => t.user_id !== newUserId);
+
+    // Distance between two lat/lng points in meters
+    const dist = (a, b) => {
+      const R = 6371000;
+      const dLat = (b[0] - a[0]) * Math.PI / 180;
+      const dLng = (b[1] - a[1]) * Math.PI / 180;
+      const s = Math.sin(dLat/2)**2 + Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+    };
+
+    const OVERLAP_RADIUS = 20; // meters
+    const overlappedTrailIds = new Set();
+
+    // For each point in new trail, check proximity to other trails
+    for (const newPt of newTrail.points) {
+      for (const trail of otherTrails) {
+        if (overlappedTrailIds.has(trail.id)) continue;
+        if (!trail.points || trail.points.length < 2) continue;
+        for (const pt of trail.points) {
+          if (dist(newPt, pt) < OVERLAP_RADIUS) {
+            overlappedTrailIds.add(trail.id);
+            break;
+          }
+        }
+      }
+    }
+
+    // Update overlapped trails color and ownership
+    for (const trailId of overlappedTrailIds) {
+      const trail = otherTrails.find(t => t.id === trailId);
+      if (!trail) continue;
+      await sb.from('trails').update({
+        color: newColor,
+        user_id: newUserId,
+        user_name: newUserName,
+      }, { id: trailId });
+      showNotif(`Território conquistado! 🔥 Você tomou uma rota de ${trail.user_name}`);
+    }
   };
 
   const handlePost = async () => {
