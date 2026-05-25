@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+
 const SUPABASE_URL = 'https://zjayscnrdspobchjwega.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_NsMAt_80qMkfjnP8NsSxJw_7pjngkwo';
 const STRAVA_CLIENT_ID = '250749';
