@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-
 const SUPABASE_URL = 'https://zjayscnrdspobchjwega.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_NsMAt_80qMkfjnP8NsSxJw_7pjngkwo';
 const STRAVA_CLIENT_ID = '250749';
@@ -448,8 +447,8 @@ function LiveMap({ currentUser, running, onTrailUpdate, savedTrails }) {
 }
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [screen, setScreen] = useState('landing');
+  const [currentUser, setCurrentUser] = useState(() => { try { const u = localStorage.getItem('domina_user'); return u ? JSON.parse(u) : null; } catch { return null; } });
+  const [screen, setScreen] = useState(() => { try { return localStorage.getItem('domina_user') ? 'app' : 'landing'; } catch { return 'landing'; } });
   const [authMode, setAuthMode] = useState(null);
   const [page, setPage] = useState('map');
   const [loading, setLoading] = useState(false);
@@ -498,6 +497,14 @@ export default function App() {
     if (code && scope) {
       window.history.replaceState({}, '', '/');
       setStravaCode(code);
+      // If user is already saved in localStorage, go straight to app
+      try {
+        const saved = localStorage.getItem('domina_user');
+        if (saved) {
+          setCurrentUser(JSON.parse(saved));
+          setScreen('app');
+        }
+      } catch {}
     }
   }, []);
 
@@ -607,7 +614,11 @@ export default function App() {
     const newTotal = (currentUser.total_distance || 0) + km;
     const newDom = (currentUser.dominated_distance || 0) + km * 0.6;
     await sb.from('users').update({ total_distance: newTotal, dominated_distance: newDom }, { id: currentUser.id });
-    setCurrentUser(prev => ({ ...prev, total_distance: newTotal, dominated_distance: newDom }));
+    setCurrentUser(prev => {
+      const updated = { ...prev, total_distance: newTotal, dominated_distance: newDom };
+      localStorage.setItem('domina_user', JSON.stringify(updated));
+      return updated;
+    });
     setStravaActivities(prev => prev.filter(a => a.id !== activity.id));
     loadTrails(); loadUsers();
     showNotif(`"${activity.name}" importada! 🔥`);
@@ -620,7 +631,7 @@ export default function App() {
     if (!Array.isArray(data) || data.length === 0) { setError('Email não encontrado.'); return; }
     const u = data[0];
     if (u.password !== loginData.password) { setError('Senha incorreta.'); return; }
-    setCurrentUser(u); setAuthMode(null); setScreen('app');
+    localStorage.setItem('domina_user', JSON.stringify(u)); setCurrentUser(u); setAuthMode(null); setScreen('app');
     showNotif(`Bem-vindo, ${u.name.split(' ')[0]}! 🔥`);
   };
 
