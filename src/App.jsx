@@ -57,7 +57,7 @@ const _stravaCode = _stravaParams.get('code');
 const _stravaScope = _stravaParams.get('scope');
 if (_stravaCode && _stravaScope) {
   // Save code to sessionStorage so React can read it after mount
-  sessionStorage.setItem('strava_pending_code', _stravaCode);
+  localStorage.setItem('strava_pending_code', _stravaCode);
   // Clean URL immediately
   window.history.replaceState({}, '', '/');
 }
@@ -502,9 +502,9 @@ export default function App() {
 
   // Handle Strava OAuth callback
   useEffect(() => {
-    const code = sessionStorage.getItem('strava_pending_code');
+    const code = localStorage.getItem('strava_pending_code');
     if (code) {
-      sessionStorage.removeItem('strava_pending_code');
+      localStorage.removeItem('strava_pending_code');
       setStravaCode(code);
     }
   }, []);
@@ -556,6 +556,7 @@ export default function App() {
   };
 
   const exchangeStravaToken = async (code) => {
+    showNotif('Conectando ao Strava... ⏳');
     setStravaLoading(true);
     try {
       const res = await fetch(`${STRAVA_PROXY}?action=token`, {
