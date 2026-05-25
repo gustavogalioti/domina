@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 const SUPABASE_URL = 'https://zjayscnrdspobchjwega.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_NsMAt_80qMkfjnP8NsSxJw_7pjngkwo';
+const STRAVA_CLIENT_ID = '250749';
+const STRAVA_PROXY = `${SUPABASE_URL}/functions/v1/strava-proxy`;
+const STRAVA_REDIRECT = 'https://domina-virid.vercel.app';
 
 const sb = {
   from: (table) => ({
@@ -470,6 +473,11 @@ export default function App() {
   const [likedPosts, setLikedPosts] = useState(new Set());
   const [modal, setModal] = useState(null);
   const [finishData, setFinishData] = useState(null);
+  const [stravaCode, setStravaCode] = useState(null);
+  const [stravaToken, setStravaToken] = useState(() => localStorage.getItem('strava_token') || null);
+  const [stravaActivities, setStravaActivities] = useState([]);
+  const [stravaLoading, setStravaLoading] = useState(false);
+  const [showStravaModal, setShowStravaModal] = useState(false);
   const timerRef = useRef(null);
 
   const showNotif = useCallback((msg) => { setNotif(msg); setTimeout(() => setNotif(null), 3200); }, []);
@@ -481,10 +489,28 @@ export default function App() {
     document.head.appendChild(s);
   }, []);
 
+  // Handle Strava OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const scope = params.get('scope');
+    if (code && scope) {
+      window.history.replaceState({}, '', '/');
+      setStravaCode(code);
+    }
+  }, []);
+
   useEffect(() => {
     if (screen !== 'app') return;
     loadTrails(); loadPosts(); loadUsers();
   }, [screen]);
+
+  // Exchange Strava code for token after login
+  useEffect(() => {
+    if (!stravaCode || !currentUser) return;
+    exchangeStravaToken(stravaCode);
+    setStravaCode(null);
+  }, [stravaCode, currentUser]);
 
   const loadTrails = async () => {
     const data = await sb.from('trails').select('*', { order: 'created_at.desc', limit: 100 });
@@ -513,6 +539,78 @@ export default function App() {
     } else { clearInterval(timerRef.current); }
     return () => clearInterval(timerRef.current);
   }, [running, activityType]);
+
+  const connectStrava = () => {
+    const scope = 'read,activity:read_all';
+    const url = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CLIENT_ID}&redirect_uri=${STRAVA_REDIRECT}&response_type=code&scope=${scope}`;
+    window.location.href = url;
+  };
+
+  const exchangeStravaToken = async (code) => {
+    setStravaLoading(true);
+    try {
+      const res = await fetch(`${STRAVA_PROXY}?action=token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (data.access_token) {
+        localStorage.setItem('strava_token', data.access_token);
+        setStravaToken(data.access_token);
+        showNotif('Strava conectado! ✅');
+      }
+    } catch (e) { console.error(e); }
+    setStravaLoading(false);
+  };
+
+  const importFromStrava = async () => {
+    if (!stravaToken) return;
+    setStravaLoading(true);
+    try {
+      const res = await fetch(`${STRAVA_PROXY}?action=activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ access_token: stravaToken }),
+      });
+      const activities = await res.json();
+      if (!Array.isArray(activities)) { showNotif('Erro ao buscar atividades.'); setStravaLoading(false); return; }
+      const valid = activities.filter(a => (a.type === 'Run' || a.type === 'Ride') && a.map?.summary_polyline);
+      setStravaActivities(valid);
+      setShowStravaModal(true);
+    } catch (e) { console.error(e); }
+    setStravaLoading(false);
+  };
+
+  const importActivity = async (activity) => {
+    // Decode Google polyline
+    const decode = (str) => {
+      let idx = 0, lat = 0, lng = 0, pts = [];
+      while (idx < str.length) {
+        let b, shift = 0, result = 0;
+        do { b = str.charCodeAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lat += (result & 1) ? ~(result >> 1) : result >> 1;
+        shift = 0; result = 0;
+        do { b = str.charCodeAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lng += (result & 1) ? ~(result >> 1) : result >> 1;
+        pts.push([lat / 1e5, lng / 1e5]);
+      }
+      return pts;
+    };
+    const points = decode(activity.map.summary_polyline);
+    const km = activity.distance / 1000;
+    await sb.from('trails').insert({
+      user_id: currentUser.id, user_name: currentUser.name.split(' ')[0],
+      color: currentUser.color, km, activity_type: activity.type === 'Run' ? 'run' : 'bike', points,
+    });
+    const newTotal = (currentUser.total_distance || 0) + km;
+    const newDom = (currentUser.dominated_distance || 0) + km * 0.6;
+    await sb.from('users').update({ total_distance: newTotal, dominated_distance: newDom }, { id: currentUser.id });
+    setCurrentUser(prev => ({ ...prev, total_distance: newTotal, dominated_distance: newDom }));
+    setStravaActivities(prev => prev.filter(a => a.id !== activity.id));
+    loadTrails(); loadUsers();
+    showNotif(`"${activity.name}" importada! 🔥`);
+  };
 
   const handleLogin = async () => {
     setError(''); setLoading(true);
@@ -813,6 +911,28 @@ export default function App() {
                 <div className="stat-card"><div className="stat-card-value" style={{ color: currentUser.color }}>{Number(currentUser.dominated_distance || 0).toFixed(1)}</div><div className="stat-card-label">km dominados</div></div>
                 <div className="stat-card"><div className="stat-card-value" style={{ color: currentUser.color }}>{Number(currentUser.dominated_area || 0).toFixed(2)}</div><div className="stat-card-label">km² área</div></div>
               </div>
+              <div className="card" style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1 }}>Strava</div>
+                {!stravaToken ? (
+                  <button onClick={connectStrava} style={{ width: '100%', padding: '12px', background: '#FC4C02', border: 'none', borderRadius: 12, color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/></svg>
+                    Conectar com Strava
+                  </button>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--green)' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="#00E676"><path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/></svg>
+                      Strava conectado
+                    </div>
+                    <button onClick={importFromStrava} disabled={stravaLoading} style={{ width: '100%', padding: '11px', background: 'linear-gradient(135deg,var(--accent),var(--accent2))', border: 'none', borderRadius: 12, color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer', opacity: stravaLoading ? 0.6 : 1 }}>
+                      {stravaLoading ? 'Buscando...' : 'Importar atividades do Strava'}
+                    </button>
+                    <button onClick={() => { localStorage.removeItem('strava_token'); setStravaToken(null); }} style={{ width: '100%', padding: '9px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 12, color: 'var(--muted)', fontSize: 13, cursor: 'pointer' }}>
+                      Desconectar Strava
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="card">
                 <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1 }}>Linha do tempo</div>
                 <div className="timeline-grid">{Array.from({ length: 9 }).map((_, i) => <div key={i} className="timeline-item"><Icon name="camera" size={18} /></div>)}</div>
@@ -851,6 +971,39 @@ export default function App() {
           </div>
         </nav>
       </div>
+
+      {/* STRAVA IMPORT MODAL */}
+      {showStravaModal && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 440 }}>
+            <div className="modal-header">
+              <div>
+                <div className="modal-title">IMPORTAR DO STRAVA</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{stravaActivities.length} atividades disponíveis</div>
+              </div>
+              <button onClick={() => setShowStravaModal(false)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer' }}><Icon name="close" size={20} /></button>
+            </div>
+            {stravaActivities.length === 0 ? (
+              <p style={{ color: 'var(--muted)', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>Todas as atividades já foram importadas! ✅</p>
+            ) : (
+              <div style={{ maxHeight: 400, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {stravaActivities.map(a => (
+                  <div key={a.id} style={{ background: 'var(--surface2)', borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 20 }}>{a.type === 'Run' ? '🏃' : '🚴'}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{(a.distance / 1000).toFixed(2)}km · {Math.floor(a.moving_time / 60)}min · {new Date(a.start_date).toLocaleDateString('pt-BR')}</div>
+                    </div>
+                    <button onClick={() => importActivity(a)} style={{ padding: '7px 14px', background: 'linear-gradient(135deg,var(--accent),var(--accent2))', border: 'none', borderRadius: 9, color: 'white', fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
+                      Importar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* FINISH MODAL */}
       {modal === 'finish' && finishData && (
