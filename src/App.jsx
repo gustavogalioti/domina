@@ -50,6 +50,17 @@ const headers = () => ({
 });
 
 const USER_COLORS = ['#FF4D00','#00C2FF','#00E676','#FFD600','#C62828','#7C4DFF','#AD1457','#00838F'];
+
+// Capture Strava code immediately on page load before React clears URL
+const _stravaParams = new URLSearchParams(window.location.search);
+const _stravaCode = _stravaParams.get('code');
+const _stravaScope = _stravaParams.get('scope');
+if (_stravaCode && _stravaScope) {
+  // Save code to sessionStorage so React can read it after mount
+  sessionStorage.setItem('strava_pending_code', _stravaCode);
+  // Clean URL immediately
+  window.history.replaceState({}, '', '/');
+}
 const getInitials = (n = '') => n.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
 const formatTime = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const timeAgo = (ts) => {
@@ -491,20 +502,10 @@ export default function App() {
 
   // Handle Strava OAuth callback
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const scope = params.get('scope');
-    if (code && scope) {
-      window.history.replaceState({}, '', '/');
+    const code = sessionStorage.getItem('strava_pending_code');
+    if (code) {
+      sessionStorage.removeItem('strava_pending_code');
       setStravaCode(code);
-      // If user is already saved in localStorage, go straight to app
-      try {
-        const saved = localStorage.getItem('domina_user');
-        if (saved) {
-          setCurrentUser(JSON.parse(saved));
-          setScreen('app');
-        }
-      } catch {}
     }
   }, []);
 
