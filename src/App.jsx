@@ -367,21 +367,30 @@ function LiveMap({ currentUser, running, onTrailUpdate, savedTrails }) {
       trailLayerRef.current = trail;
       const markerHtml = `<div style="width:16px;height:16px;border-radius:50%;background:${currentUser.color};border:3px solid white;box-shadow:0 0 0 5px ${currentUser.color}44;"></div>`;
       const icon = L.divIcon({ html: markerHtml, className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+      const distMeters = (a, b) => {
+        const R = 6371000, dLat = (b[0]-a[0])*Math.PI/180, dLng = (b[1]-a[1])*Math.PI/180;
+        const s = Math.sin(dLat/2)**2 + Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLng/2)**2;
+        return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+      };
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
           const { latitude: lat, longitude: lng, accuracy } = pos.coords;
           setGpsState('ok');
-          trailPointsRef.current.push([lat, lng]);
-          trail.setLatLngs(trailPointsRef.current);
-          if (!markerRef.current) markerRef.current = L.marker([lat, lng], { icon }).addTo(map);
-          else markerRef.current.setLatLng([lat, lng]);
+          const newPt = [lat, lng];
+          const pts = trailPointsRef.current;
+          // Skip GPS jumps > 80m (screen unlock artifact)
+          if (pts.length > 0 && distMeters(pts[pts.length - 1], newPt) > 80) return;
+          pts.push(newPt);
+          trail.setLatLngs(pts);
+          if (!markerRef.current) markerRef.current = L.marker(newPt, { icon }).addTo(map);
+          else markerRef.current.setLatLng(newPt);
           if (accuracyCircRef.current) accuracyCircRef.current.remove();
-          accuracyCircRef.current = L.circle([lat, lng], { radius: accuracy, color: currentUser.color, fillColor: currentUser.color, fillOpacity: 0.07, weight: 1, opacity: 0.4 }).addTo(map);
-          map.panTo([lat, lng]);
-          if (onTrailUpdate) onTrailUpdate([...trailPointsRef.current]);
+          accuracyCircRef.current = L.circle(newPt, { radius: accuracy, color: currentUser.color, fillColor: currentUser.color, fillOpacity: 0.07, weight: 1, opacity: 0.4 }).addTo(map);
+          map.panTo(newPt);
+          if (onTrailUpdate) onTrailUpdate([...pts]);
         },
         () => setGpsState('denied'),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     } else {
       if (watchIdRef.current) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
@@ -414,11 +423,16 @@ function LiveMap({ currentUser, running, onTrailUpdate, savedTrails }) {
       </div>
       <div className="map-overlay-top">
         <div className="legend-title">Territórios</div>
-        {savedTrails.slice(0, 5).map((t, i) => (
+        {Object.values(savedTrails.reduce((acc, t) => {
+          const k = t.user_id || t.user_name;
+          if (!acc[k]) acc[k] = { user_name: t.user_name, color: t.color, km: 0 };
+          acc[k].km += Number(t.km || 0);
+          return acc;
+        }, {})).sort((a,b) => b.km - a.km).slice(0, 5).map((t, i) => (
           <div key={i} className="legend-item">
             <div className="legend-line" style={{ background: t.color }} />
             <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.user_name}</span>
-            <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 11, flexShrink:0 }}>{Number(t.km || 0).toFixed(1)}km</span>
+            <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 11, flexShrink:0 }}>{t.km.toFixed(1)}km</span>
           </div>
         ))}
       </div>
